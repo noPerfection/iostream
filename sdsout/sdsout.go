@@ -22,6 +22,7 @@ type SDSOut struct {
 	mu      sync.RWMutex
 	config  *config.Handler
 	writer  io.Writer
+	packer  message.Packer
 	socket  *zmq.Socket
 	done    chan struct{}
 	stopped chan struct{}
@@ -31,6 +32,7 @@ type SDSOut struct {
 func New() *SDSOut {
 	return &SDSOut{
 		writer: os.Stdout,
+		packer: &message.MessagePacker{},
 	}
 }
 
@@ -71,17 +73,21 @@ func (out *SDSOut) StartInBg() error {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	ready := make(chan error, 1)
-	url := config.ConnectUrl(out.config.Id, out.config.Port)
+	url := out.config.ClientUrl()
 	writer := out.writer
+	packer := out.packer
 	if writer == nil {
 		writer = os.Stdout
+	}
+	if packer == nil {
+		packer = &message.MessagePacker{}
 	}
 
 	out.done = done
 	out.stopped = stopped
 	out.mu.Unlock()
 
-	go out.run(url, writer, done, ready, stopped)
+	go out.run(url, writer, packer, done, ready, stopped)
 
 	if err := <-ready; err != nil {
 		out.mu.Lock()
@@ -94,7 +100,7 @@ func (out *SDSOut) StartInBg() error {
 	return nil
 }
 
-func (out *SDSOut) run(url string, writer io.Writer, done <-chan struct{}, ready chan<- error, stopped chan<- struct{}) {
+func (out *SDSOut) run(url string, writer io.Writer, packer message.Packer, done <-chan struct{}, ready chan<- error, stopped chan<- struct{}) {
 	defer close(stopped)
 
 	socket, err := zmq.NewSocket(zmq.SUB)
@@ -143,7 +149,7 @@ func (out *SDSOut) run(url string, writer io.Writer, done <-chan struct{}, ready
 		if err != nil {
 			continue
 		}
-		if !out.handleMessage(writer, raw) {
+		if !out.handleMessage(writer, packer, raw) {
 			out.closeSocket(socket)
 			out.clearRunState()
 			return
@@ -151,8 +157,8 @@ func (out *SDSOut) run(url string, writer io.Writer, done <-chan struct{}, ready
 	}
 }
 
-func (out *SDSOut) handleMessage(writer io.Writer, raw []string) bool {
-	req, err := message.NewReq(raw)
+func (out *SDSOut) handleMessage(writer io.Writer, packer message.Packer, raw []string) bool {
+	req, err := packer.DeserializeRequest(raw)
 	if err != nil {
 		return true
 	}

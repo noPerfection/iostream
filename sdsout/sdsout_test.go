@@ -22,7 +22,7 @@ type TestSDSOutSuite struct {
 
 func (test *TestSDSOutSuite) SetupTest() {
 	category := strings.ReplaceAll(test.T().Name(), "/", "_")
-	test.config = config.NewInternalHandler(config.PublisherType, category, category)
+	test.config = config.New(config.PublisherType, category, category, 0)
 	test.out = New()
 }
 
@@ -42,7 +42,7 @@ func (test *TestSDSOutSuite) startPublisher() {
 
 	pub, err := zmq.NewSocket(zmq.PUB)
 	s.Require().NoError(err)
-	s.Require().NoError(pub.Bind(config.ExternalUrl(test.config.Id, test.config.Port)))
+	s.Require().NoError(pub.Bind(test.config.HandlerUrl()))
 	test.pub = pub
 }
 
@@ -50,7 +50,7 @@ func (test *TestSDSOutSuite) publish(command string, params datatype.KeyValue) {
 	s := &test.Suite
 
 	req := &message.Request{Command: command, Parameters: params}
-	envelope, err := req.ZmqEnvelope()
+	envelope, err := (&message.MessagePacker{}).SerializeRequest(req)
 	s.Require().NoError(err)
 	_, err = test.pub.SendMessage(envelope)
 	s.Require().NoError(err)

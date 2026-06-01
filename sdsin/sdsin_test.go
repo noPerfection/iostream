@@ -5,10 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noPerfection/datatype"
 	"github.com/noPerfection/log"
 	"github.com/noPerfection/protocol/handler/config"
-	"github.com/noPerfection/protocol/message"
 	zmq "github.com/pebbe/zmq4"
 	"github.com/stretchr/testify/suite"
 )
@@ -31,7 +29,7 @@ func (test *TestSDSInSuite) SetupTest() {
 
 	test.publisher = New()
 	category := strings.ReplaceAll(s.T().Name(), "/", "_")
-	test.config = config.NewInternalHandler(config.PublisherType, category, category)
+	test.config = config.New(config.PublisherType, category, category, 0)
 
 	s.Require().Error(test.publisher.SetLogger(test.logger))
 	test.publisher.SetConfig(test.config)
@@ -47,11 +45,6 @@ func (test *TestSDSInSuite) TearDownTest() {
 	if test.publisher != nil && test.publisher.socket != nil {
 		s.Require().NoError(test.publisher.Close())
 	}
-	if test.publisher != nil && test.publisher.Manager != nil {
-		req := &message.Request{Command: config.HandlerClose, Parameters: datatype.New()}
-		test.publisher.Manager.SetClose(req)
-		time.Sleep(time.Millisecond * 20)
-	}
 }
 
 func (test *TestSDSInSuite) subscribe() {
@@ -60,7 +53,7 @@ func (test *TestSDSInSuite) subscribe() {
 	sub, err := zmq.NewSocket(zmq.SUB)
 	s.Require().NoError(err)
 	s.Require().NoError(sub.SetSubscribe(""))
-	s.Require().NoError(sub.Connect(config.ExternalUrl(test.config.Id, test.config.Port)))
+	s.Require().NoError(sub.Connect(test.config.ClientUrl()))
 
 	test.sub = sub
 	test.poller = zmq.NewPoller()
@@ -85,7 +78,7 @@ func (test *TestSDSInSuite) Test_10_WritePublishesRequest() {
 
 	received, err := test.sub.RecvMessage(0)
 	s.Require().NoError(err)
-	req, err := message.NewReq(received)
+	req, err := test.publisher.Packer().DeserializeRequest(received)
 	s.Require().NoError(err)
 	s.Require().Equal("io", req.CommandName())
 
@@ -141,7 +134,7 @@ func (test *TestSDSInSuite) Test_50_ClosePublishesEOF() {
 
 	received, err := test.sub.RecvMessage(0)
 	s.Require().NoError(err)
-	req, err := message.NewReq(received)
+	req, err := test.publisher.Packer().DeserializeRequest(received)
 	s.Require().NoError(err)
 	s.Require().Equal("eof", req.CommandName())
 }

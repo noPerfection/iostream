@@ -9,14 +9,13 @@ import (
 	"github.com/noPerfection/log"
 	"github.com/noPerfection/protocol/handler/base"
 	"github.com/noPerfection/protocol/handler/config"
-	"github.com/noPerfection/protocol/handler/handler_manager"
+	"github.com/noPerfection/protocol/handler/control"
 	"github.com/noPerfection/protocol/message"
 	zmq "github.com/pebbe/zmq4"
 )
 
 const (
 	queueSize        = 1024
-	partPublisher    = "publisher"
 	publisherIdle    = "idle"
 	publisherRunning = "running"
 	commandIO        = "io"
@@ -26,6 +25,7 @@ const (
 // SDSIn publishes data written through io.Writer as SDS request messages to a ZMQ PUB socket.
 type SDSIn struct {
 	*base.Handler
+	Control base.Interface
 
 	logger *log.Logger
 
@@ -43,6 +43,7 @@ var _ io.Writer = (*SDSIn)(nil)
 func New() *SDSIn {
 	return &SDSIn{
 		Handler: base.New(),
+		Control: control.New(),
 	}
 }
 
@@ -50,6 +51,7 @@ func New() *SDSIn {
 func (publisher *SDSIn) SetConfig(handler *config.Handler) {
 	handler.Type = config.PublisherType
 	publisher.Handler.SetConfig(handler)
+	publisher.Control.SetConfig(control.CreateInternalConfig(handler))
 }
 
 // SetLogger sets the logger for this publisher.
@@ -57,12 +59,21 @@ func (publisher *SDSIn) SetLogger(parent *log.Logger) error {
 	if err := publisher.Handler.SetLogger(parent); err != nil {
 		return err
 	}
+	if parent == nil {
+		publisher.mu.Lock()
+		publisher.logger = nil
+		publisher.mu.Unlock()
+		return publisher.Control.SetLogger(nil)
+	}
+	if publisher.Config() == nil {
+		return fmt.Errorf("configuration not set")
+	}
 
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
 
 	publisher.logger = parent.Child(publisher.Config().Id)
-	return nil
+	return publisher.Control.SetLogger(parent.Child(control.ControlCategory))
 }
 
 // Type returns the handler type.
@@ -71,7 +82,7 @@ func (publisher *SDSIn) Type() config.HandlerType {
 }
 
 // Route returns an error because SDSIn publishes io.Writer messages and has no request routes.
-func (publisher *SDSIn) Route(_ string, _ interface{}) error {
+func (publisher *SDSIn) Route(_ string, _ base.HandleFunc) error {
 	return fmt.Errorf("sdsin doesn't support routing")
 }
 
@@ -127,24 +138,26 @@ func (publisher *SDSIn) startPublisher() error {
 	return nil
 }
 
-// Start starts the publisher socket and the handler manager.
+// Start starts the publisher socket and the control handler.
 func (publisher *SDSIn) Start() error {
 	if publisher.Config() == nil {
 		return fmt.Errorf("configuration not set")
 	}
-	if publisher.Manager == nil {
-		return fmt.Errorf("handler manager not set. call SetConfig and SetLogger first")
+	if publisher.Control == nil {
+		return fmt.Errorf("control not set. call SetConfig and SetLogger first")
 	}
 
-	if err := publisher.setManagerRoutes(); err != nil {
+	if err := publisher.setControlRoutes(); err != nil {
 		return err
 	}
 	if err := publisher.startPublisher(); err != nil {
 		return fmt.Errorf("sdsin.startPublisher: %w", err)
 	}
-	if err := publisher.Manager.Start(); err != nil {
-		_ = publisher.Close()
-		return fmt.Errorf("handler_manager.Start: %w", err)
+	if publisher.Control.Status() != base.SocketReady {
+		if err := publisher.Control.Start(); err != nil {
+			_ = publisher.Close()
+			return fmt.Errorf("control.Start: %w", err)
+		}
 	}
 
 	return nil
@@ -161,45 +174,23 @@ func (publisher *SDSIn) StartInBg() error {
 	return <-ready
 }
 
-func (publisher *SDSIn) setManagerRoutes() error {
+func (publisher *SDSIn) setControlRoutes() error {
 	onStatus := func(req message.RequestInterface) message.ReplyInterface {
-		status := publisher.publisherStatus()
-		params := datatype.New()
-		if status == publisherRunning {
-			params.Set("status", handler_manager.Ready)
-		} else {
-			params.Set("status", handler_manager.Incomplete).
-				Set("parts", datatype.New().Set(partPublisher, status))
-		}
-		return req.Ok(params)
+		return req.Ok(datatype.New().Set("status", publisher.publisherStatus()))
 	}
 
 	onClose := func(req message.RequestInterface) message.ReplyInterface {
-		part, err := req.RouteParameters().StringValue("part")
-		if err != nil {
-			return req.Fail(fmt.Sprintf("req.Parameters.GetString('part'): %v", err))
-		}
-		if part != partPublisher {
-			return req.Fail(fmt.Sprintf("unknown part '%s' to stop", part))
-		}
 		if err := publisher.Close(); err != nil {
 			return req.Fail(err.Error())
 		}
 		return req.Ok(datatype.New())
 	}
 
-	onRunPart := func(req message.RequestInterface) message.ReplyInterface {
-		part, err := req.RouteParameters().StringValue("part")
-		if err != nil {
-			return req.Fail(fmt.Sprintf("req.Parameters.GetString('part'): %v", err))
-		}
-		if part != partPublisher {
-			return req.Fail(fmt.Sprintf("unknown part '%s' to start", part))
-		}
+	onStart := func(req message.RequestInterface) message.ReplyInterface {
 		if err := publisher.startPublisher(); err != nil {
 			return req.Fail(fmt.Sprintf("sdsin.startPublisher: %v", err))
 		}
-		return req.Ok(datatype.New())
+		return req.Ok(datatype.New().Set("status", publisher.publisherStatus()))
 	}
 
 	onMessageAmount := func(req message.RequestInterface) message.ReplyInterface {
@@ -213,43 +204,22 @@ func (publisher *SDSIn) setManagerRoutes() error {
 		return req.Ok(datatype.New().Set("queue_length", queueLength))
 	}
 
-	onParts := func(req message.RequestInterface) message.ReplyInterface {
-		return req.Ok(datatype.New().
-			Set("parts", []string{partPublisher}).
-			Set("message_types", []string{"queue_length"}))
+	if err := publisher.Control.Route(control.HandlerStatus, onStatus); err != nil {
+		return fmt.Errorf("overwriting control 'status' failed: %w", err)
 	}
-
-	onInstanceAmount := func(req message.RequestInterface) message.ReplyInterface {
-		return req.Ok(datatype.New().Set("instance_amount", 0))
+	if err := publisher.Control.Route(control.HandlerClose, onClose); err != nil {
+		return fmt.Errorf("overwriting control 'close' failed: %w", err)
 	}
-
-	onUnsupported := func(req message.RequestInterface) message.ReplyInterface {
-		return req.Fail("sdsin doesn't use instances")
+	if err := publisher.Control.Route(control.HandlerStart, onStart); err != nil {
+		return fmt.Errorf("overwriting control 'start' failed: %w", err)
 	}
-
-	if err := publisher.Manager.Route(config.HandlerStatus, onStatus); err != nil {
-		return fmt.Errorf("overwriting handler manager 'status' failed: %w", err)
+	if err := publisher.Control.Route("message-amount", onMessageAmount); err != nil {
+		return fmt.Errorf("overwriting control 'message-amount' failed: %w", err)
 	}
-	if err := publisher.Manager.Route(config.ClosePart, onClose); err != nil {
-		return fmt.Errorf("overwriting handler manager 'close' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.RunPart, onRunPart); err != nil {
-		return fmt.Errorf("overwriting handler manager 'run' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.MessageAmount, onMessageAmount); err != nil {
-		return fmt.Errorf("overwriting handler manager 'message_amount' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.Parts, onParts); err != nil {
-		return fmt.Errorf("overwriting handler manager 'parts' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.InstanceAmount, onInstanceAmount); err != nil {
-		return fmt.Errorf("overwriting handler manager 'instance_amount' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.AddInstance, onUnsupported); err != nil {
-		return fmt.Errorf("overwriting handler manager 'add_instance' failed: %w", err)
-	}
-	if err := publisher.Manager.Route(config.DeleteInstance, onUnsupported); err != nil {
-		return fmt.Errorf("overwriting handler manager 'delete_instance' failed: %w", err)
+	if err := publisher.Control.Route(control.HandlerConfig, func(req message.RequestInterface) message.ReplyInterface {
+		return req.Ok(datatype.New().Set("config", publisher.Config()))
+	}); err != nil {
+		return fmt.Errorf("overwriting control 'config' failed: %w", err)
 	}
 
 	return nil
@@ -264,7 +234,7 @@ func (publisher *SDSIn) run(handlerConfig *config.Handler, queue <-chan message.
 		return
 	}
 
-	url := config.ExternalUrl(handlerConfig.Id, handlerConfig.Port)
+	url := handlerConfig.HandlerUrl()
 	if err := socket.Bind(url); err != nil {
 		_ = socket.Close()
 		ready <- fmt.Errorf("socket.Bind('%s'): %v", url, err)
@@ -273,6 +243,8 @@ func (publisher *SDSIn) run(handlerConfig *config.Handler, queue <-chan message.
 
 	publisher.mu.Lock()
 	publisher.socket = socket
+	publisher.SetSocket(socket)
+	publisher.SetSocketReady()
 	publisher.mu.Unlock()
 
 	ready <- nil
@@ -290,9 +262,9 @@ func (publisher *SDSIn) run(handlerConfig *config.Handler, queue <-chan message.
 }
 
 func (publisher *SDSIn) sendRequest(socket *zmq.Socket, req message.RequestInterface) {
-	reqStr, err := req.ZmqEnvelope()
+	reqStr, err := publisher.Packer().SerializeRequest(req)
 	if err != nil {
-		publisher.logger.Error("req.ZmqEnvelope", "error", err)
+		publisher.logger.Error("Packer.SerializeRequest", "error", err)
 		return
 	}
 	if _, err := socket.SendMessageDontwait(reqStr); err != nil {
@@ -309,6 +281,7 @@ func (publisher *SDSIn) closeSocket(socket *zmq.Socket) {
 	defer publisher.mu.Unlock()
 
 	publisher.socket = nil
+	publisher.SetSocketNil()
 }
 
 // Close stops the publisher and closes the PUB socket.
