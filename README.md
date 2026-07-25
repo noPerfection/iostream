@@ -2,6 +2,8 @@
 
 `iostream` lets Go programs send `io.Writer` output to another process, component, terminal, file, or buffer without changing the code that produced it.
 
+> License? **Public Domain**
+
 ## Requirements
 
 - Go 1.19 or newer.
