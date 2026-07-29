@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/noPerfection/log"
-	"github.com/noPerfection/protocol/handler/config"
+	"github.com/noPerfection/protocol/message"
 	zmq "github.com/pebbe/zmq4"
 	"github.com/stretchr/testify/suite"
 )
@@ -14,7 +14,7 @@ import (
 type TestSDSInSuite struct {
 	suite.Suite
 	publisher *SDSIn
-	config    *config.Handler
+	endpoint  message.Endpoint
 	logger    *log.Logger
 	sub       *zmq.Socket
 	poller    *zmq.Poller
@@ -29,10 +29,10 @@ func (test *TestSDSInSuite) SetupTest() {
 
 	test.publisher = New()
 	category := strings.ReplaceAll(s.T().Name(), "/", "_")
-	test.config = config.New(config.PublisherType, category, category, 0)
+	test.endpoint = message.NewEndpoint(category, 0)
 
 	s.Require().Error(test.publisher.SetLogger(test.logger))
-	test.publisher.SetConfig(test.config)
+	test.publisher.SetConfig(test.endpoint)
 	s.Require().NoError(test.publisher.SetLogger(test.logger))
 }
 
@@ -53,7 +53,7 @@ func (test *TestSDSInSuite) subscribe() {
 	sub, err := zmq.NewSocket(zmq.SUB)
 	s.Require().NoError(err)
 	s.Require().NoError(sub.SetSubscribe(""))
-	s.Require().NoError(sub.Connect(test.config.ClientUrl()))
+	s.Require().NoError(sub.Connect(test.endpoint.ClientUrl()))
 
 	test.sub = sub
 	test.poller = zmq.NewPoller()
@@ -78,7 +78,7 @@ func (test *TestSDSInSuite) Test_10_WritePublishesRequest() {
 
 	received, err := test.sub.RecvMessage(0)
 	s.Require().NoError(err)
-	req, err := test.publisher.Packer().DeserializeRequest(received)
+	req, _, err := test.publisher.Packer().DeserializeRequest(received)
 	s.Require().NoError(err)
 	s.Require().Equal("io", req.CommandName())
 
@@ -134,7 +134,7 @@ func (test *TestSDSInSuite) Test_50_ClosePublishesEOF() {
 
 	received, err := test.sub.RecvMessage(0)
 	s.Require().NoError(err)
-	req, err := test.publisher.Packer().DeserializeRequest(received)
+	req, _, err := test.publisher.Packer().DeserializeRequest(received)
 	s.Require().NoError(err)
 	s.Require().Equal("eof", req.CommandName())
 }

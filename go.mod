@@ -1,6 +1,6 @@
 module github.com/noPerfection/iostream
 
-go 1.19
+go 1.22
 
 require (
 	github.com/noPerfection/datatype v0.0.0
@@ -20,6 +20,7 @@ replace (
 )
 
 require (
+	github.com/ahmetson/mushroom v0.0.0-20260707102258-ccc67a16e74a // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/lipgloss v0.8.0 // indirect
 	github.com/charmbracelet/log v0.2.4 // indirect
@@ -33,6 +34,7 @@ require (
 	github.com/muesli/kmeans v0.3.1 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
+	github.com/noPerfection/protocol/client v0.0.0-20260708100121-590bd988188f // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/noPerfection/datatype"
-	"github.com/noPerfection/protocol/handler/config"
 	"github.com/noPerfection/protocol/message"
 	zmq "github.com/pebbe/zmq4"
 	"github.com/stretchr/testify/suite"
@@ -15,14 +14,14 @@ import (
 
 type TestSDSOutSuite struct {
 	suite.Suite
-	out    *SDSOut
-	pub    *zmq.Socket
-	config *config.Handler
+	out      *SDSOut
+	pub      *zmq.Socket
+	endpoint message.Endpoint
 }
 
 func (test *TestSDSOutSuite) SetupTest() {
 	category := strings.ReplaceAll(test.T().Name(), "/", "_")
-	test.config = config.New(config.PublisherType, category, category, 0)
+	test.endpoint = message.NewEndpoint(category, 0)
 	test.out = New()
 }
 
@@ -42,7 +41,7 @@ func (test *TestSDSOutSuite) startPublisher() {
 
 	pub, err := zmq.NewSocket(zmq.PUB)
 	s.Require().NoError(err)
-	s.Require().NoError(pub.Bind(test.config.HandlerUrl()))
+	s.Require().NoError(pub.Bind(test.endpoint.HandlerUrl()))
 	test.pub = pub
 }
 
@@ -62,7 +61,7 @@ func (test *TestSDSOutSuite) Test_10_WritesIoRowsToConfiguredWriter() {
 	test.startPublisher()
 
 	var output bytes.Buffer
-	test.out.SetConfig(test.config, &output)
+	test.out.SetConfig(test.endpoint, &output)
 	s.Require().NoError(test.out.StartInBg())
 
 	time.Sleep(time.Millisecond * 100)
@@ -79,7 +78,7 @@ func (test *TestSDSOutSuite) Test_20_IgnoresNonIoMessages() {
 	test.startPublisher()
 
 	var output bytes.Buffer
-	test.out.SetConfig(test.config, &output)
+	test.out.SetConfig(test.endpoint, &output)
 	s.Require().NoError(test.out.StartInBg())
 
 	time.Sleep(time.Millisecond * 100)
@@ -101,7 +100,7 @@ func (test *TestSDSOutSuite) Test_40_CloseStopsSubscriber() {
 	test.startPublisher()
 
 	var output bytes.Buffer
-	test.out.SetConfig(test.config, &output)
+	test.out.SetConfig(test.endpoint, &output)
 	s.Require().NoError(test.out.StartInBg())
 	s.Require().NoError(test.out.Close())
 	s.Require().Nil(test.out.socket)
@@ -113,7 +112,7 @@ func (test *TestSDSOutSuite) Test_50_EOFCloseStopsSubscriber() {
 	test.startPublisher()
 
 	var output bytes.Buffer
-	test.out.SetConfig(test.config, &output)
+	test.out.SetConfig(test.endpoint, &output)
 	s.Require().NoError(test.out.StartInBg())
 
 	time.Sleep(time.Millisecond * 100)

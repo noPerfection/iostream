@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noPerfection/protocol/handler/config"
 	"github.com/noPerfection/protocol/message"
 	zmq "github.com/pebbe/zmq4"
 )
@@ -19,13 +18,13 @@ const (
 
 // SDSOut subscribes to SDSIn messages and writes received rows to an io.Writer.
 type SDSOut struct {
-	mu      sync.RWMutex
-	config  *config.Handler
-	writer  io.Writer
-	packer  message.Packer
-	socket  *zmq.Socket
-	done    chan struct{}
-	stopped chan struct{}
+	mu       sync.RWMutex
+	endpoint message.Endpoint
+	writer   io.Writer
+	packer   message.Packer
+	socket   *zmq.Socket
+	done     chan struct{}
+	stopped  chan struct{}
 }
 
 // New creates an SDSOut subscriber that writes to os.Stdout by default.
@@ -36,16 +35,16 @@ func New() *SDSOut {
 	}
 }
 
-// Config returns the SDSIn handler configuration.
-func (out *SDSOut) Config() *config.Handler {
+// Config returns the SDSIn handler endpoint configuration.
+func (out *SDSOut) Config() message.Endpoint {
 	out.mu.RLock()
 	defer out.mu.RUnlock()
 
-	return out.config
+	return out.endpoint
 }
 
-// SetConfig sets the SDSIn handler to subscribe to and, optionally, the output writer.
-func (out *SDSOut) SetConfig(handler *config.Handler, writers ...io.Writer) {
+// SetConfig sets the SDSIn handler endpoint to subscribe to and, optionally, the output writer.
+func (out *SDSOut) SetConfig(endpoint message.Endpoint, writers ...io.Writer) {
 	writer := io.Writer(os.Stdout)
 	if len(writers) > 0 && writers[0] != nil {
 		writer = writers[0]
@@ -54,14 +53,14 @@ func (out *SDSOut) SetConfig(handler *config.Handler, writers ...io.Writer) {
 	out.mu.Lock()
 	defer out.mu.Unlock()
 
-	out.config = handler
+	out.endpoint = endpoint
 	out.writer = writer
 }
 
 // StartInBg starts the subscriber in a goroutine and waits until the socket is ready.
 func (out *SDSOut) StartInBg() error {
 	out.mu.Lock()
-	if out.config == nil {
+	if out.endpoint == (message.Endpoint{}) {
 		out.mu.Unlock()
 		return fmt.Errorf("configuration not set")
 	}
@@ -73,7 +72,7 @@ func (out *SDSOut) StartInBg() error {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	ready := make(chan error, 1)
-	url := out.config.ClientUrl()
+	url := out.endpoint.ClientUrl()
 	writer := out.writer
 	packer := out.packer
 	if writer == nil {
@@ -158,7 +157,7 @@ func (out *SDSOut) run(url string, writer io.Writer, packer message.Packer, done
 }
 
 func (out *SDSOut) handleMessage(writer io.Writer, packer message.Packer, raw []string) bool {
-	req, err := packer.DeserializeRequest(raw)
+	req, _, err := packer.DeserializeRequest(raw)
 	if err != nil {
 		return true
 	}
