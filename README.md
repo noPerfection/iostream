@@ -43,6 +43,19 @@ import (
 )
 ```
 
+## Local development
+
+For local testing, building, and running, prefix each command with `GOFLAGS=-modfile=go.local.mod`:
+
+```sh
+GOFLAGS=-modfile=go.local.mod go test ./...
+GOFLAGS=-modfile=go.local.mod go build ./...
+GOFLAGS=-modfile=go.local.mod go run ./cmd/your-app
+cd config && GOFLAGS=-modfile=go.local.mod go test ./...
+```
+
+`make test` and `make build` already use `go.local.mod`. Use `make test-remote` or plain `go test ./...` without `GOFLAGS` for the remote module file.
+
 ## Why
 
 Many Go libraries already write useful output to an `io.Writer`: logs, command output, progress messages, reports, test output, and text events.
@@ -192,3 +205,4 @@ fmt.Println(row)
 For TCP, publishers bind with `cfg.HandlerUrl()`. Local IDs (`localhost`, `127.0.0.*`, or an empty host) bind to `tcp://*:{port}`; other IDs bind to `tcp://{id}:{port}`. Subscribers connect with `cfg.ClientUrl()` (`tcp://{id}:{port}`). For in-process subscribers, keep `Port` as `0` and use an ID without the `tmp` prefix so the URL is `inproc://{id}`.
 
 ---
+
